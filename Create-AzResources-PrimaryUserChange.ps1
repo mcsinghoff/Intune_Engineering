@@ -2,8 +2,8 @@
 $subscriptionId = "c1fcbc7a-9c43-4da8-9629-cddbcd201532"
 $location       = "westeurope"
 $rg             = "rg-intune-primaryuser-test"
-$vmName         = "TEST-WIN11-01"
-$adminUser      = "localadmin01"
+$vmName         = "TEST-WIN11-00"
+$adminUser      = "localadmin00"
 
 # Use a strong password
 $adminPassword = Read-Host "Enter local admin password" -AsSecureString
@@ -37,10 +37,12 @@ az vm create `
   --location $location `
   --image "MicrosoftWindowsDesktop:Windows-11:win11-24h2-ent:latest" `
   --size "Standard_D2s_v5" `
+  --storage-sku Standard_LRS `
   --admin-username $adminUser `
   --admin-password $adminPasswordPlain `
   --license-type Windows_Client `
   --public-ip-sku Standard `
+  --assign-identity `
   --nsg-rule RDP
 
 # Restrict RDP to your current public IP
@@ -64,10 +66,11 @@ az vm extension set `
   --publisher Microsoft.Azure.ActiveDirectory `
   --name AADLoginForWindows
 
+
 <# Delete the resource with: 
 
 $rg     = "rg-intune-primaryuser-test"
-$vmName = "<<TAKE FROM ABOVE>>"
+$vmName = "VM NAME"
 
 az vm delete `
   --resource-group $rg `
@@ -111,7 +114,7 @@ $adminUserId = az ad user show `
 
 az role assignment create `
   --assignee $installerUserId `
-  --role "Virtual Machine Administrator Login" `
+  --role "Virtual Machine User Login" `
   --scope $vmId
 
 az role assignment create `
