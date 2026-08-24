@@ -226,7 +226,8 @@ let RankedCandidates =
         DeviceShortName = tostring(split(DeviceName, ".")[0]),
         AccountNameLower = tolower(AccountName),
         AccountDomainLower = tolower(AccountDomain),
-        AccountSidString = tostring(AccountSid)
+        AccountSidString = tostring(AccountSid),
+        CandidateUpnFromTelemetry = tolower(tostring(parse_json(AdditionalFields).Upn))
     | where AccountNameLower !endswith "$"
     | where not(AccountNameLower matches regex ExcludedAccountRegex)
     | where AccountSidString !startswith "S-1-5-90"
@@ -236,11 +237,15 @@ let RankedCandidates =
         CandidateLogonCount = count(),
         CandidateActiveDays = dcount(startofday(Timestamp)),
         CandidateFirstLogon = min(Timestamp),
-        CandidateLastLogon = max(Timestamp)
+        CandidateLastLogon = max(Timestamp),
+        CandidateUpns = make_set_if(CandidateUpnFromTelemetry, isnotempty(CandidateUpnFromTelemetry), 2)
         by DeviceId, AadDeviceId, DeviceName, DeviceShortName,
            CandidateDomain = AccountDomainLower,
            CandidateAccountName = AccountNameLower,
            CandidateSid = AccountSidString
+    | extend
+        CandidateUpn = iff(array_length(CandidateUpns) == 1, tostring(CandidateUpns[0]), ""),
+        CandidateUpnCount = array_length(CandidateUpns)
     | where CandidateLogonCount >= __MIN_LOGONS__ and CandidateActiveDays >= __MIN_ACTIVE_DAYS__
     | sort by DeviceId asc, CandidateLogonCount desc, CandidateActiveDays desc, CandidateLastLogon desc
     | serialize
@@ -255,6 +260,7 @@ Winner
 | extend DominanceRatio = iff(isnull(RunnerUpLogonCount) or RunnerUpLogonCount == 0, real(null), todouble(CandidateLogonCount) / todouble(RunnerUpLogonCount))
 | where isnull(RunnerUpLogonCount) or DominanceRatio >= __MIN_DOMINANCE_RATIO__
 | project DeviceName, DeviceShortName, AadDeviceId, CandidateAccountName, CandidateSid,
+          CandidateUpn, CandidateUpnCount,
           CandidateLogonCount, CandidateActiveDays, CandidateFirstLogon, CandidateLastLogon,
           RunnerUpLogonCount, DominanceRatio
 | order by DeviceShortName asc
@@ -273,8 +279,18 @@ Winner
 function Get-CandidateGraphUser {
     param(
         [string]$CandidateSid,
-        [Parameter(Mandatory = $true)][string]$CandidateAccountName
+        [Parameter(Mandatory = $true)][string]$CandidateAccountName,
+        [string]$CandidateUpn
     )
+
+    if (-not [string]::IsNullOrWhiteSpace($CandidateUpn)) {
+        $normalizedUpn = $CandidateUpn.Trim() -replace '\\@', '@'
+        if ($normalizedUpn -notmatch '^[^@\s]+@[^@\s]+$') {
+            throw "Defender supplied an invalid candidate UPN '$CandidateUpn'."
+        }
+        $encodedUpn = [uri]::EscapeDataString($normalizedUpn)
+        return Invoke-GraphRequestWithRetry -Method GET -Uri "https://graph.microsoft.com/v1.0/users/$encodedUpn?`$select=id,userPrincipalName,accountEnabled"
+    }
 
     if ($CandidateAccountName -match "@") {
         $encodedUpn = [uri]::EscapeDataString($CandidateAccountName)
@@ -417,13 +433,21 @@ try {
         $aadDeviceId = [string](Get-GraphValue -Object $row -Name "AadDeviceId")
         $candidateAccountName = [string](Get-GraphValue -Object $row -Name "CandidateAccountName")
         $candidateSid = [string](Get-GraphValue -Object $row -Name "CandidateSid")
+        $candidateUpnFromTelemetry = [string](Get-GraphValue -Object $row -Name "CandidateUpn")
+        $candidateUpnCount = [int](Get-GraphValue -Object $row -Name "CandidateUpnCount")
         $logonCount = [int](Get-GraphValue -Object $row -Name "CandidateLogonCount")
         $activeDays = [int](Get-GraphValue -Object $row -Name "CandidateActiveDays")
         $candidateUpn = ""
         $currentPrimaryUpn = ""
 
         try {
-            $candidateUser = Get-CandidateGraphUser -CandidateSid $candidateSid -CandidateAccountName $candidateAccountName
+            if ($candidateUpnCount -gt 1) {
+                throw "Defender supplied multiple UPN values for account '$candidateAccountName' on the same device."
+            }
+            $candidateUser = Get-CandidateGraphUser `
+                -CandidateSid $candidateSid `
+                -CandidateAccountName $candidateAccountName `
+                -CandidateUpn $candidateUpnFromTelemetry
             $candidateUpn = [string](Get-GraphValue -Object $candidateUser -Name "userPrincipalName")
             $candidateUserId = [string](Get-GraphValue -Object $candidateUser -Name "id")
             $candidateEnabled = Get-GraphValue -Object $candidateUser -Name "accountEnabled"
