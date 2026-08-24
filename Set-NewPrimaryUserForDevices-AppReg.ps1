@@ -289,12 +289,12 @@ function Get-CandidateGraphUser {
             throw "Defender supplied an invalid candidate UPN '$CandidateUpn'."
         }
         $encodedUpn = [uri]::EscapeDataString($normalizedUpn)
-        return Invoke-GraphRequestWithRetry -Method GET -Uri "https://graph.microsoft.com/v1.0/users/$encodedUpn?`$select=id,userPrincipalName,accountEnabled"
+        return Invoke-GraphRequestWithRetry -Method GET -Uri "https://graph.microsoft.com/v1.0/users/$($encodedUpn)?`$select=id,userPrincipalName,accountEnabled"
     }
 
     if ($CandidateAccountName -match "@") {
         $encodedUpn = [uri]::EscapeDataString($CandidateAccountName)
-        return Invoke-GraphRequestWithRetry -Method GET -Uri "https://graph.microsoft.com/v1.0/users/$encodedUpn?`$select=id,userPrincipalName,accountEnabled"
+        return Invoke-GraphRequestWithRetry -Method GET -Uri "https://graph.microsoft.com/v1.0/users/$($encodedUpn)?`$select=id,userPrincipalName,accountEnabled"
     }
 
     if (-not [string]::IsNullOrWhiteSpace($CandidateSid)) {
@@ -312,7 +312,7 @@ function Get-CandidateGraphUser {
 
     $fallbackUpn = "{0}@{1}" -f $CandidateAccountName, $CandidateUpnSuffix.TrimStart("@")
     $encodedFallbackUpn = [uri]::EscapeDataString($fallbackUpn)
-    return Invoke-GraphRequestWithRetry -Method GET -Uri "https://graph.microsoft.com/v1.0/users/$encodedFallbackUpn?`$select=id,userPrincipalName,accountEnabled"
+    return Invoke-GraphRequestWithRetry -Method GET -Uri "https://graph.microsoft.com/v1.0/users/$($encodedFallbackUpn)?`$select=id,userPrincipalName,accountEnabled"
 }
 
 function Get-IntuneManagedDevice {
