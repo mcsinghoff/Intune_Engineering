@@ -98,8 +98,9 @@ local Windows requirement. Verify the current sign-in token with:
 whoami /groups | Select-String 'S-1-5-32-544'
 ```
 
-If the group is absent, add the user from an elevated session that already has local administrator
-rights, then sign out and back in so that Windows creates a new token:
+On an ordinary Windows client, if the group is absent, add the user from an elevated session that
+already has local administrator rights, then sign out and back in so that Windows creates a new
+token:
 
 ```powershell
 $administrators = Get-LocalGroup -SID 'S-1-5-32-544'
@@ -108,10 +109,11 @@ Add-LocalGroupMember `
     -Member 'AzureAD\installer99@contoso.com'
 ```
 
-Use the customer's real UPN. On an Azure VM, alternatively assign **Virtual Machine Administrator
-Login** to the user at the VM, resource group, or subscription scope and verify that the assignment
-applies to this exact VM. After the fresh sign-in, launch the built-in manual MDM enrollment UI from
-that Entra user's normal desktop session:
+Use the customer's real UPN. For an Azure VM using the `AADLoginForWindows` extension, use Azure
+RBAC instead: assign **Virtual Machine Administrator Login** to the user at the VM, resource group,
+or subscription scope and verify that the assignment applies to this exact VM. Do not confuse it
+with **Virtual Machine User Login**, which grants only standard-user privileges. After the fresh
+sign-in, launch the built-in manual MDM enrollment UI from that Entra user's normal desktop session:
 
 ```powershell
 Start-Process explorer.exe -ArgumentList 'ms-device-enrollment:?mode=mdm'
