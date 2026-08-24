@@ -336,11 +336,11 @@ function Invoke-GraphRequestWithRetry {
     }
 }
 
-#after testing, add this variable again: {{let ExcludedCandidateRegex = @"(?i)^(adm-|admin-|svc-|sa-|installer[0-9]{2}$|dwm-|umfd-|system$|localservice$|networkservice$|root$|daemon$|sshd$|nobody$)";}}
 function Invoke-PrimaryUserHuntingQuery {
     $query = @'
 let Lookback = 30d;
-let ExcludedCandidateRegex = @"(?i)^(adm-|admin-|svc-|sa-|installer[0-9]{2}$|dwm-|umfd-|system$|localservice$|networkservice$|root$|daemon$|sshd$|nobody$)";rlet ValidLogonTypes = dynamic(["Interactive", "CachedInteractive", "RemoteInteractive"]);
+let ExcludedCandidateRegex = @"(?i)^(adm-|admin-|svc-|sa-|installer[0-9]{2}$|dwm-|umfd-|system$|localservice$|networkservice$|root$|daemon$|sshd$|nobody$)";
+let ValidLogonTypes = dynamic(["Interactive", "CachedInteractive", "RemoteInteractive"]);
 let WindowsClientDevices =
     DeviceInfo
     | summarize arg_max(Timestamp, *) by DeviceId
