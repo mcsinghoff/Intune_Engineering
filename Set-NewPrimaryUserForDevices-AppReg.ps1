@@ -110,6 +110,7 @@ $transcriptPath = Join-Path $LogPath "PrimaryUserCorrection-$timestamp.log"
 $results = [System.Collections.Generic.List[object]]::new()
 $changeCount = 0
 $transcriptStarted = $false
+$runSucceeded = $false
 
 function Write-Info {
     param([Parameter(Mandatory = $true)][string]$Message)
@@ -197,7 +198,7 @@ function Invoke-PrimaryUserHuntingQuery {
     $query = @'
 let Lookback = __LOOKBACK_DAYS__d;
 let ValidLogonTypes = dynamic(__VALID_LOGON_TYPES__);
-let ExcludedAccountRegex = @"(?i)^(adm-|admin-|svc-|sa-|installer[0-9]+$|deployment|intune-installer|dwm-|umfd-|system$|localservice$|networkservice$|defaultaccount$|wdagutilityaccount$)";
+let ExcludedAccountRegex = @"(?i)^(adm-|admin-|localadmin[0-9_-]*$|local-admin[0-9_-]*$|svc-|sa-|installer[0-9]+$|deployment|intune-installer|dwm-|umfd-|system$|localservice$|networkservice$|defaultaccount$|wdagutilityaccount$)";
 let WindowsClients =
     DeviceInfo
     | summarize arg_max(Timestamp, *) by DeviceId
@@ -319,12 +320,79 @@ function Set-IntunePrimaryUser {
     Invoke-GraphRequestWithRetry -Method POST -Uri $uri -Body @{ "@odata.id" = "https://graph.microsoft.com/v1.0/users/$UserId" } | Out-Null
 }
 
+function Get-ClientCertificate {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Thumbprint
+    )
+
+    $normalizedThumbprint = ($Thumbprint -replace "\\s", "").ToUpperInvariant()
+    $certificatePaths = @(
+        "Cert:\\LocalMachine\\My\\$normalizedThumbprint",
+        "Cert:\\CurrentUser\\My\\$normalizedThumbprint"
+    )
+    $foundCertificates = [System.Collections.Generic.List[string]]::new()
+    $accessErrors = [System.Collections.Generic.List[string]]::new()
+    $windowsIdentity = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
+
+    foreach ($certificatePath in $certificatePaths) {
+        if (-not (Test-Path -LiteralPath $certificatePath)) {
+            continue
+        }
+
+        $certificate = Get-Item -LiteralPath $certificatePath
+        $foundCertificates.Add($certificatePath)
+
+        if (-not $certificate.HasPrivateKey) {
+            $accessErrors.Add("${certificatePath}: certificate has no private key. Importing a .cer file is not sufficient.")
+            continue
+        }
+
+        $rsa = $null
+        try {
+            $rsa = [System.Security.Cryptography.X509Certificates.RSACertificateExtensions]::GetRSAPrivateKey($certificate)
+            if ($null -eq $rsa) {
+                throw "Certificate does not expose an RSA private key."
+            }
+
+            $probe = [System.Text.Encoding]::UTF8.GetBytes("Intune-PrimaryUser-Automation private-key access test")
+            $null = $rsa.SignData(
+                $probe,
+                [System.Security.Cryptography.HashAlgorithmName]::SHA256,
+                [System.Security.Cryptography.RSASignaturePadding]::Pkcs1
+            )
+
+            Write-Info "Using certificate '$($certificate.Subject)' from '$certificatePath' as Windows identity '$windowsIdentity'."
+            return $certificate
+        }
+        catch {
+            $accessErrors.Add("${certificatePath}: private key cannot be opened by '$windowsIdentity': $($_.Exception.Message)")
+        }
+        finally {
+            if ($null -ne $rsa) {
+                $rsa.Dispose()
+            }
+        }
+    }
+
+    if ($foundCertificates.Count -eq 0) {
+        throw "Certificate '$normalizedThumbprint' was not found in LocalMachine\\My or CurrentUser\\My. The .cer file on disk is not used by this script."
+    }
+
+    throw (
+        "Certificate '$normalizedThumbprint' was found, but no usable private key is available. " +
+        "Grant the scheduled-task identity Read access through certlm.msc > Personal > Certificates > Manage Private Keys. " +
+        "Details: " + ($accessErrors -join " | ")
+    )
+}
+
 try {
     Start-Transcript -Path $transcriptPath -Force | Out-Null
     $transcriptStarted = $true
 
     Import-Module Microsoft.Graph.Authentication -ErrorAction Stop
-    Connect-MgGraph -TenantId $TenantId -ClientId $ClientId -CertificateThumbprint $CertificateThumbprint -ContextScope Process -NoWelcome | Out-Null
+    $clientCertificate = Get-ClientCertificate -Thumbprint $CertificateThumbprint
+    Connect-MgGraph -TenantId $TenantId -ClientId $ClientId -Certificate $clientCertificate -ContextScope Process -NoWelcome | Out-Null
 
     $context = Get-MgContext
     if ($context.AuthType -ne "AppOnly") { throw "Expected app-only Graph authentication, but AuthType is '$($context.AuthType)'." }
@@ -400,10 +468,18 @@ try {
             Write-Warning "Failed '$deviceName': $($_.Exception.Message)"
         }
     }
+
+    $runSucceeded = $true
 }
 finally {
     $results | Export-Csv -Path $resultPath -NoTypeInformation -Encoding UTF8
     try { Disconnect-MgGraph | Out-Null } catch { }
     if ($transcriptStarted) { try { Stop-Transcript | Out-Null } catch { } }
-    Write-Info "Completed. Changes: $changeCount. Result: $resultPath"
+    if ($runSucceeded) {
+        Write-Info "Completed successfully. Changes: $changeCount. Result: $resultPath"
+    }
+    else {
+        Write-Warning "Run failed before completion. Changes: $changeCount. Diagnostic result: $resultPath"
+    }
 }
+
