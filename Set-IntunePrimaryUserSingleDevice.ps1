@@ -28,7 +28,7 @@
 .EXAMPLE
     .\Set-IntunePrimaryUserSingleDevice.ps1 `
         -TenantId "ade56966-ae5b-4e8d-95c6-b84548490b80" `
-        -DeviceName "DESKTOP-BD80G10" `
+        -DeviceName "TEST-WIN11-00" `
         -UserPrincipalName "installer99@icscf.de"
 #>
 
