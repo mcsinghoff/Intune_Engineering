@@ -54,6 +54,17 @@
         -Apply
 
     Applies at most 25 high-confidence changes.
+
+### Test - Delete in the end from Synopsis
+.EXAMPLE 
+    .\Set-NewPrimaryUserForDevices-AppReg.ps1 `
+        -TenantId "ade56966-ae5b-4e8d-95c6-b84548490b80" `
+        -ClientId "5a84c8e4-e453-4d46-b3a8-06676f907cc4" `
+        -CertificateThumbprint "43acc1da1f27ff26c6354c7f33c8363345722b8c" `
+        -LogPath "C:\PrimaryUserCorrection\logs" `
+        -IncludeRemoteInteractive `
+        -LookBackDays 3 `
+        -MaxChanges 5
 #>
 
 [CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = "Medium")]
