@@ -89,8 +89,29 @@ Get-WinEvent `
 - Event 76 contains the enrollment failure code.
 - No EnterpriseMgmt task and no 75/76 event normally means enrollment was never initiated.
 
-For an already Entra-joined Windows client, the built-in manual MDM enrollment UI can be launched
-from the licensed Entra user's non-elevated session:
+For an already configured, Entra-joined Windows client, the signed-in Entra user must also be a
+member of the device's local **Administrators** group. Entra directory roles such as Global
+Administrator, Intune Administrator, or Security Administrator do not by themselves satisfy this
+local Windows requirement. Verify the current sign-in token with:
+
+```powershell
+whoami /groups | Select-String 'S-1-5-32-544'
+```
+
+If the group is absent, add the user from an elevated session that already has local administrator
+rights, then sign out and back in so that Windows creates a new token:
+
+```powershell
+$administrators = Get-LocalGroup -SID 'S-1-5-32-544'
+Add-LocalGroupMember `
+    -Group $administrators `
+    -Member 'AzureAD\installer99@contoso.com'
+```
+
+Use the customer's real UPN. On an Azure VM, alternatively assign **Virtual Machine Administrator
+Login** to the user at the VM, resource group, or subscription scope and verify that the assignment
+applies to this exact VM. After the fresh sign-in, launch the built-in manual MDM enrollment UI from
+that Entra user's normal desktop session:
 
 ```powershell
 Start-Process explorer.exe -ArgumentList 'ms-device-enrollment:?mode=mdm'
@@ -383,6 +404,7 @@ retention period appropriate for the customer because device and user identifier
 | Local account cannot be resolved | Local accounts are not Entra users. Use a real Entra end user and ensure local admin patterns are excluded. |
 | No Intune managed device matched | Device is not fully MDM-enrolled, Entra/Defender IDs do not correlate, or it is visible only as **Managed by: MDE**. |
 | Device is Entra joined but absent from Intune | Check the enrolling user's Intune service plan, MDM scope, enrollment restrictions, device limit, EnterpriseMgmt tasks, and events 75/76. |
+| `You don't have the right privileges to perform this operation` during manual MDM enrollment | The currently signed-in Windows user is not recognized as a local Administrator. Add that Entra user locally or assign Azure RBAC **Virtual Machine Administrator Login** to this VM, then sign out and back in. Entra administrator directory roles alone are insufficient. |
 | Device is absent from Defender `DeviceInfo` | Deploy MDE onboarding and verify `OnboardingState = 1`, SENSE events, and network connectivity. |
 | Candidate appears only with `-IncludeRemoteInteractive` | All observed user logons are RDP `RemoteInteractive` events. Use console logons or explicitly accept that design. |
 
@@ -401,6 +423,7 @@ retention period appropriate for the customer because device and user identifier
 - [Microsoft Graph PowerShell certificate authentication](https://learn.microsoft.com/powershell/microsoftgraph/authentication-commands)
 - [Microsoft Graph permissions reference](https://learn.microsoft.com/graph/permissions-reference)
 - [Windows device enrollment guide for Intune](https://learn.microsoft.com/intune/device-enrollment/windows/guide)
+- [Troubleshoot insufficient privileges during Windows enrollment](https://learn.microsoft.com/troubleshoot/mem/intune/device-enrollment/no-permission-to-enroll-windows-devices)
 - [Deploy an Endpoint detection and response policy with Intune](https://learn.microsoft.com/intune/device-configuration/endpoint-security/deploy-edr)
 - [Defender XDR `DeviceLogonEvents` schema](https://learn.microsoft.com/defender-xdr/advanced-hunting-devicelogonevents-table)
 - [Manage group Managed Service Accounts](https://learn.microsoft.com/windows-server/identity/ad-ds/manage/group-managed-service-accounts/group-managed-service-accounts/manage-group-managed-service-accounts)
