@@ -45,7 +45,7 @@
     If specified, changes are written to Intune. Without this switch, the script runs in report-only mode.
 
 .EXAMPLE
-    .\Set-IntunePrimaryUserFromCsv.ps1 `
+    .\Set-NewPrimaryUserForDevices-AppReg.ps1 `
         -CsvPath "C:\PrimaryUserCorrection\input\primary-user-candidates.csv" `
         -TenantId "00000000-0000-0000-0000-000000000000" `
         -ClientId "11111111-1111-1111-1111-111111111111" `
@@ -53,7 +53,7 @@
         -LogPath "C:\PrimaryUserCorrection\logs"
 
 .EXAMPLE
-    .\Set-IntunePrimaryUserFromCsv.ps1 `
+    .\Set-NewPrimaryUserForDevices-AppReg.ps1 `
         -CsvPath "C:\PrimaryUserCorrection\input\primary-user-candidates.csv" `
         -TenantId "00000000-0000-0000-0000-000000000000" `
         -ClientId "11111111-1111-1111-1111-111111111111" `
@@ -62,6 +62,18 @@
         -Apply `
         -MaxChanges 25
 
+#############################################################################
+        #####Just for today, delete before finishing development:
+.EXAMPLE 
+    .\Set-NewPrimaryUserForDevices-AppReg.ps1 `
+        -CsvPath "C:\PrimaryUserCorrection\input\primary-user-candidates.csv" `
+        -TenantId "ade56966-ae5b-4e8d-95c6-b84548490b80" `
+        -ClientId "5a84c8e4-e453-4d46-b3a8-06676f907cc4" `
+        -CertificateThumbprint "43acc1da1f27ff26c6354c7f33c8363345722b8c" `
+        -LogPath "C:\PrimaryUserCorrection\logs" `
+        -Apply `
+        -MaxChanges 25
+#############################################################################
 .NOTES
     Requirements:
     - Microsoft.Graph.Authentication PowerShell module
