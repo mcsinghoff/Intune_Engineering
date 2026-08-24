@@ -97,8 +97,9 @@ Start-Process explorer.exe -ArgumentList 'ms-device-enrollment:?mode=mdm'
 ```
 
 The enrolling user must be in the Intune MDM user scope, be allowed by Windows enrollment
-restrictions, remain below the configured device limit, and have an enabled Microsoft Intune service
-plan. Microsoft 365 E5 includes Intune; Office 365 E5 does not.
+restrictions, remain below the configured device limit, and have the base **Microsoft Intune Plan 1**
+service enabled. Intune Plan 2 is additive to Plan 1 and is not a replacement for the base MDM
+license. Microsoft 365 E5 includes Intune Plan 1; Office 365 E5 does not.
 
 ### Verify Defender for Endpoint onboarding
 
