@@ -198,7 +198,7 @@ function Invoke-PrimaryUserHuntingQuery {
     $query = @'
 let Lookback = __LOOKBACK_DAYS__d;
 let ValidLogonTypes = dynamic(__VALID_LOGON_TYPES__);
-let ExcludedAccountRegex = @"(?i)^(adm-|admin-|svc-|sa-|installer[0-9]+$|deployment|intune-installer|dwm-|umfd-|system$|localservice$|networkservice$|defaultaccount$|wdagutilityaccount$)";
+let ExcludedAccountRegex = @"(?i)^(adm-|admin-|localadmin[0-9_-]*$|local-admin[0-9_-]*$|svc-|sa-|installer[0-9]+$|deployment|intune-installer|dwm-|umfd-|system$|localservice$|networkservice$|defaultaccount$|wdagutilityaccount$)";
 let WindowsClients =
     DeviceInfo
     | summarize arg_max(Timestamp, *) by DeviceId
@@ -482,3 +482,4 @@ finally {
         Write-Warning "Run failed before completion. Changes: $changeCount. Diagnostic result: $resultPath"
     }
 }
+
