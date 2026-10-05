@@ -448,12 +448,12 @@ function Resolve-CandidateUpnFromAd {
 
     if ($null -eq $adUser -and -not [string]::IsNullOrWhiteSpace($CandidateSamAccountName)) {
         $safeSam = $CandidateSamAccountName.Replace("'", "''")
-        $matches = @(Get-ADUser -Filter "SamAccountName -eq '$safeSam'" -Properties UserPrincipalName, Enabled)
+        $matchesOfQuery = @(Get-ADUser -Filter "SamAccountName -eq '$safeSam'" -Properties UserPrincipalName, Enabled)
 
-        if ($matches.Count -eq 1) {
-            $adUser = $matches[0]
+        if ($matchesOfQuery.Count -eq 1) {
+            $adUser = $matchesOfQuery[0]
         }
-        elseif ($matches.Count -gt 1) {
+        elseif ($matchesOfQuery.Count -gt 1) {
             throw "Multiple AD users found for SamAccountName '$CandidateSamAccountName'."
         }
     }
@@ -551,9 +551,9 @@ function Get-ManagedDeviceByName {
 
         try {
             $response = Invoke-GraphRequestWithRetry -Method GET -Uri $uri
-            $matches = @(Get-GraphValue -Object $response -Name "value")
+            $matchesOfQuery = @(Get-GraphValue -Object $response -Name "value")
 
-            foreach ($match in $matches) {
+            foreach ($match in $matchesOfQuery) {
                 if ($null -ne $match) {
                     $allMatches.Add($match)
                 }
