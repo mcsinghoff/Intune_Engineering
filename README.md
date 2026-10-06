@@ -8,6 +8,8 @@ The production script runs unattended with a Microsoft Entra app registration an
 queries Defender XDR directly; it does **not** require a manually exported or uploaded CSV file.
 CSV files in the log directory are output reports only.
 
+For a short operator-focused explanation of which command to use at each stage, see [`COMMAND-GUIDE.md`](COMMAND-GUIDE.md).
+
 ## Architecture
 
 ```text
