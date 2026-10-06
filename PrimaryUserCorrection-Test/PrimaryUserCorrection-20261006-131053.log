@@ -1,0 +1,39 @@
+**********************
+Beginn des PowerShell-Transkripts
+Startzeit: 20261006131053
+Benutzername: AzureAD\MerlinCorneliusSingh
+RunAs-Benutzer: AzureAD\MerlinCorneliusSingh
+Konfigurationsname: 
+Computer: SN-3CM8424023FB (Microsoft Windows NT 10.0.22631.0)
+Hostanwendung: C:\Program Files\WindowsApps\Microsoft.PowerShell_7.6.6.0_x64__8wekyb3d8bbwe\pwsh.dll -noexit -command try { . "c:\Users\MerlinCorneliusSingh\AppData\Local\Programs\Microsoft VS Code\07f806f999\resources\app\out\vs\workbench\contrib\terminal\common\scripts\shellIntegration.ps1" } catch {}
+Prozess-ID: 46020
+PSVersion: 7.6.6
+PSEdition: Core
+GitCommitId: 7.6.6
+OS: Microsoft Windows 10.0.22631
+Platform: Win32NT
+PSCompatibleVersions: 1.0, 2.0, 3.0, 4.0, 5.0, 5.1, 6.0, 7.0
+PSRemotingProtocolVersion: 2.4
+SerializationVersion: 1.1.0.1
+WSManStackVersion: 3.0
+**********************
+[2026-10-06 13:10:53] SkipAdResolution is enabled. Active Directory module will not be imported.
+[2026-10-06 13:10:53] Connecting to Microsoft Graph with delegated admin login.
+WARNUNG: Note: Sign in by Web Account Manager (WAM) is enabled by default on Windows. If using an embedded terminal, the interactive browser window may be hidden behind other windows.
+[2026-10-06 13:11:06] Connected as: AdminMSN@icscf.de
+[2026-10-06 13:11:06] Tenant: ade56966-ae5b-4e8d-95c6-b84548490b80
+[2026-10-06 13:11:06] Running Defender XDR Advanced Hunting query.
+[2026-10-06 13:11:07] Advanced Hunting returned 1 candidate rows.
+[2026-10-06 13:11:08] Maximum changes in this run: 25
+[2026-10-06 13:11:08] Exact Intune device lookup did not find 'test-win11-00'. Falling back to paged managedDevice inventory lookup.
+[2026-10-06 13:11:09] Exact Intune device lookup did not find 'test-win11-00'. Falling back to paged managedDevice inventory lookup.
+[2026-10-06 13:11:09] Intune lookup for Defender device 'test-win11-00' / short name 'test-win11-00' returned 0 device(s).
+[2026-10-06 13:11:09] Completed.
+[2026-10-06 13:11:09] Changes performed: 0
+[2026-10-06 13:11:09] Result CSV: C:\Repos\Intune_Engineering\PrimaryUserCorrection-Test\PrimaryUserCorrection-Result-20261006-131053.csv
+[2026-10-06 13:11:09] Transcript: C:\Repos\Intune_Engineering\PrimaryUserCorrection-Test\PrimaryUserCorrection-20261006-131053.log
+WARNUNG: Failed to clear the persisted MSAL token cache during Disconnect-MgGraph: The authority (including the tenant ID) must be in a well-formed URI format.  (Parameter 'authority')
+**********************
+Ende des PowerShell-Transkripts
+Endzeit: 20261006131109
+**********************

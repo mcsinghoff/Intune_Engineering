@@ -1,0 +1,2 @@
+"Timestamp","DeviceName","DeviceShortName","CurrentPrimaryUser","CandidateSamAccountName","CandidateSid","CandidateUpn","Action","Reason"
+"2026-10-06T13:11:09","test-win11-00","test-win11-00","","adminmsn","S-1-12-1-682230782-1318902019-3223552140-4107516375","","Skipped","Intune device not found."
