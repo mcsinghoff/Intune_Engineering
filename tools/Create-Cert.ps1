@@ -1,112 +1,53 @@
+#Requires -RunAsAdministrator
+[CmdletBinding()]
+param(
+    [string]$Subject = "CN=Intune-PrimaryUser-Automation",
+    [string]$ExportPath = "C:\Automation\Intune-PrimaryUser-Automation.cer",
+    [ValidateRange(1, 5)]
+    [int]$ValidityYears = 2
+)
+
+Set-StrictMode -Version 3.0
+$ErrorActionPreference = "Stop"
+
+$exportDirectory = Split-Path -Parent $ExportPath
+if (-not (Test-Path -LiteralPath $exportDirectory)) {
+    New-Item -Path $exportDirectory -ItemType Directory -Force | Out-Null
+}
+
 $cert = New-SelfSignedCertificate `
-    -Subject "CN=Intune-PrimaryUser-Automation" `
+    -Subject $Subject `
     -CertStoreLocation "Cert:\LocalMachine\My" `
     -KeyAlgorithm RSA `
     -KeyLength 2048 `
     -HashAlgorithm SHA256 `
     -KeySpec Signature `
     -KeyExportPolicy NonExportable `
-    -NotAfter (Get-Date).AddYears(2)
-
-New-Item -Path C:\Automation -ItemType Directory -Force
+    -NotAfter (Get-Date).AddYears($ValidityYears)
 
 Export-Certificate `
     -Cert $cert `
-    -FilePath C:\Automation\Intune-PrimaryUser-Automation.cer
+    -FilePath $ExportPath `
+    -Force | Out-Null
 
-$cert.Thumbprint
+Write-Host "Client-authentication certificate created."
+Write-Host "Subject:    $($cert.Subject)"
+Write-Host "Thumbprint: $($cert.Thumbprint)"
+Write-Host "Valid until: $($cert.NotAfter)"
+Write-Host "Public CER: $ExportPath"
+Write-Host ""
+Write-Host "Next steps:"
+Write-Host "1. Upload only the CER to the Entra app registration under Certificates & secrets > Certificates."
+Write-Host "2. Grant the scheduled-task identity Read access to the private key in certlm.msc."
+Write-Host "3. Do not export or distribute the private key."
+Write-Host ""
+Write-Warning "This certificate authenticates the Graph application. It does NOT sign the PowerShell script. Use a separate enterprise code-signing certificate if Authenticode/App Control protection is required."
 
-
-
-###
-
-function Get-SafeProperty {
-    param(
-        $InputObject,
-        [Parameter(Mandatory)]
-        [string]$Name
-    )
-
-    if ($null -eq $InputObject) {
-        return $null
-    }
-
-    if ($InputObject -is [System.Collections.IDictionary]) {
-        return $InputObject[$Name]
-    }
-
-    $property = $InputObject.PSObject.Properties[$Name]
-
-    if ($null -ne $property) {
-        return $property.Value
-    }
-
-    return $null
+[PSCustomObject]@{
+    Subject    = $cert.Subject
+    Thumbprint = $cert.Thumbprint
+    NotBefore  = $cert.NotBefore
+    NotAfter   = $cert.NotAfter
+    Store      = "LocalMachine\My"
+    PublicCer  = $ExportPath
 }
-
-$configurations = @(
-    (Invoke-MgGraphRequest `
-        -Method GET `
-        -Uri 'https://graph.microsoft.com/v1.0/deviceManagement/deviceEnrollmentConfigurations'
-    ).value
-)
-
-$configurations |
-    ForEach-Object {
-        $windowsRestriction = Get-SafeProperty `
-            -InputObject $_ `
-            -Name 'windowsRestriction'
-
-        $singlePlatformRestriction = Get-SafeProperty `
-            -InputObject $_ `
-            -Name 'platformRestriction'
-
-        $platformType = Get-SafeProperty `
-            -InputObject $_ `
-            -Name 'platformType'
-
-        $effectiveRestriction = if ($null -ne $windowsRestriction) {
-            $windowsRestriction
-        }
-        elseif ($platformType -eq 'windows') {
-            $singlePlatformRestriction
-        }
-        else {
-            $null
-        }
-
-        [pscustomobject]@{
-            Id = Get-SafeProperty $_ 'id'
-
-            DisplayName = Get-SafeProperty $_ 'displayName'
-
-            ODataType = Get-SafeProperty $_ '@odata.type'
-
-            EnrollmentConfigurationType = Get-SafeProperty `
-                $_ `
-                'deviceEnrollmentConfigurationType'
-
-            PlatformType = $platformType
-
-            Priority = Get-SafeProperty $_ 'priority'
-
-            DeviceLimit = Get-SafeProperty $_ 'limit'
-
-            WindowsPlatformBlocked = Get-SafeProperty `
-                $effectiveRestriction `
-                'platformBlocked'
-
-            PersonalWindowsBlocked = Get-SafeProperty `
-                $effectiveRestriction `
-                'personalDeviceEnrollmentBlocked'
-
-            MinimumVersion = Get-SafeProperty `
-                $effectiveRestriction `
-                'osMinimumVersion'
-
-            MaximumVersion = Get-SafeProperty `
-                $effectiveRestriction `
-                'osMaximumVersion'
-        }
-    } |
-    Format-List
