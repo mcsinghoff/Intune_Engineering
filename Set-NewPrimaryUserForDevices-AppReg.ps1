@@ -426,10 +426,10 @@ function Get-ClientCertificate {
         [string]$Thumbprint
     )
 
-    $normalizedThumbprint = ($Thumbprint -replace "\\s", "").ToUpperInvariant()
+    $normalizedThumbprint = ($Thumbprint -replace '\s', '').ToUpperInvariant()
     $certificatePaths = @(
-        "Cert:\\LocalMachine\\My\\$normalizedThumbprint",
-        "Cert:\\CurrentUser\\My\\$normalizedThumbprint"
+        "Cert:\LocalMachine\My\$normalizedThumbprint",
+        "Cert:\CurrentUser\My\$normalizedThumbprint"
     )
     $foundCertificates = [System.Collections.Generic.List[string]]::new()
     $accessErrors = [System.Collections.Generic.List[string]]::new()
@@ -486,7 +486,7 @@ function Get-ClientCertificate {
     }
 
     if ($foundCertificates.Count -eq 0) {
-        throw "Certificate '$normalizedThumbprint' was not found in LocalMachine\\My or CurrentUser\\My. The .cer file on disk is not used by this script."
+        throw "Certificate '$normalizedThumbprint' was not found in LocalMachine\My or CurrentUser\My. The .cer file on disk is not used by this script."
     }
 
     throw (
