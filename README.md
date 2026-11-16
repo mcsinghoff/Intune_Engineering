@@ -1,6 +1,8 @@
 # Intune Primary User Automation
 
 > Deutsch: [ReadMe-Deutsch.md](ReadMe-Deutsch.md)
+>
+> Documentation maintenance rule: changes to production setup, permissions, security controls, parameters or Scheduled Task deployment must be reflected in both README files.
 
 This repository contains the production deployment for automatically correcting Microsoft Intune **Primary User** assignments when Windows devices were initially enrolled with installer accounts such as `installer99@customer.tld`.
 
