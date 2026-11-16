@@ -593,7 +593,7 @@ try {
 }
 catch {
     $fatalError = $_.Exception.Message
-    Write-Error "Fatal run failure: $fatalError"
+    Write-Warning "Fatal run failure: $fatalError"
 }
 finally {
     try {
