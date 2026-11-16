@@ -1,89 +1,59 @@
 <#
 .SYNOPSIS
-    Updates the Microsoft Intune Primary User for Windows devices based on a reviewed Defender XDR Advanced Hunting CSV export.
+    Legacy/manual workflow: updates Intune Primary User assignments from a previously reviewed
+    Defender XDR Advanced Hunting CSV export.
 
 .DESCRIPTION
-    This script reads a CSV file that contains device/user candidates from Defender XDR Advanced Hunting.
-    It resolves the candidate user against on-prem Active Directory and Microsoft Entra ID, checks the current Intune
-    Primary User, and updates the Intune Primary User only when safety conditions are met.
-
-    Designed for controlled execution from an on-premises management server, for example by Windows Scheduled Task.
+    This script is retained for controlled/manual workflows and troubleshooting. It is not the
+    recommended daily production automation. For unattended production use
+    Set-NewPrimaryUserForDevices-AppReg.ps1, which runs Advanced Hunting directly.
 
     Default behavior is report-only. Use -Apply to perform changes.
 
 .PARAMETER CsvPath
-    Path to the CSV exported from Defender XDR Advanced Hunting.
+    Path to a reviewed candidate CSV exported from Defender XDR Advanced Hunting.
 
 .PARAMETER TenantId
     Microsoft Entra tenant ID.
 
 .PARAMETER ClientId
-    Application client ID of the Entra App Registration.
+    Application (client) ID of the Entra App Registration.
 
 .PARAMETER CertificateThumbprint
-    Thumbprint of the certificate used for app-only Microsoft Graph authentication.
+    Thumbprint of the app-only authentication certificate.
 
 .PARAMETER LogPath
     Folder where logs and result CSV files are written.
 
-.PARAMETER MinCandidateLogonCount
-    Minimum number of candidate user logons required.
-
-.PARAMETER MinCandidateActiveDays
-    Minimum number of distinct active days required.
-
-.PARAMETER RequiredConfidence
-    Required confidence from the KQL result. Default: High.
-
-.PARAMETER InstallerPrimaryUserRegex
-    Regex that identifies installer/deployment users currently set as Primary User in Intune.
-
-.PARAMETER MaxChanges
-    Maximum number of Primary User changes allowed per run.
-
 .PARAMETER Apply
-    If specified, changes are written to Intune. Without this switch, the script runs in report-only mode.
+    Enables writes. Without this switch the script reports WouldChange only.
 
 .EXAMPLE
-    .\Set-NewPrimaryUserForDevices-AppReg.ps1 `
+    .\Set-NewPrimaryUserForDevices-AppReg-UploadCSV.ps1 `
         -CsvPath "C:\PrimaryUserCorrection\input\primary-user-candidates.csv" `
-        -TenantId "00000000-0000-0000-0000-000000000000" `
-        -ClientId "11111111-1111-1111-1111-111111111111" `
-        -CertificateThumbprint "ABCDEF123456..." `
+        -TenantId "<tenant-id>" `
+        -ClientId "<application-client-id>" `
+        -CertificateThumbprint "<certificate-thumbprint>" `
         -LogPath "C:\PrimaryUserCorrection\logs"
 
+    Runs the legacy CSV workflow in report-only mode.
+
 .EXAMPLE
-    .\Set-NewPrimaryUserForDevices-AppReg.ps1 `
+    .\Set-NewPrimaryUserForDevices-AppReg-UploadCSV.ps1 `
         -CsvPath "C:\PrimaryUserCorrection\input\primary-user-candidates.csv" `
-        -TenantId "00000000-0000-0000-0000-000000000000" `
-        -ClientId "11111111-1111-1111-1111-111111111111" `
-        -CertificateThumbprint "ABCDEF123456..." `
+        -TenantId "<tenant-id>" `
+        -ClientId "<application-client-id>" `
+        -CertificateThumbprint "<certificate-thumbprint>" `
         -LogPath "C:\PrimaryUserCorrection\logs" `
         -Apply `
-        -MaxChanges 25
+        -MaxChanges 5
 
-#############################################################################
-        #####Just for today, delete before finishing development:
-.EXAMPLE 
-    .\Set-NewPrimaryUserForDevices-AppReg.ps1 `
-        -CsvPath "C:\PrimaryUserCorrection\input\primary-user-candidates.csv" `
-        -TenantId "ade56966-ae5b-4e8d-95c6-b84548490b80" `
-        -ClientId "5a84c8e4-e453-4d46-b3a8-06676f907cc4" `
-        -CertificateThumbprint "43acc1da1f27ff26c6354c7f33c8363345722b8c" `
-        -LogPath "C:\PrimaryUserCorrection\logs" `
-        -Apply `
-        -MaxChanges 25
-#############################################################################
+    Performs at most five changes from the reviewed CSV.
+
 .NOTES
-    Requirements:
-    - Microsoft.Graph.Authentication PowerShell module
-    - ActiveDirectory PowerShell module
-    - App Registration with certificate authentication
-    - Graph application permissions:
-        DeviceManagementManagedDevices.ReadWrite.All
-        User.Read.All or Directory.Read.All
+    Legacy/manual path. The fully automated production workflow is
+    Set-NewPrimaryUserForDevices-AppReg.ps1.
 #>
-
 [CmdletBinding(SupportsShouldProcess = $true)]
 param(
     [Parameter(Mandatory = $true)]
