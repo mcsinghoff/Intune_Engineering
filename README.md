@@ -88,6 +88,18 @@ Install the Graph authentication module:
 Install-Module Microsoft.Graph.Authentication -Scope AllUsers
 ```
 
+### Recommended Scheduled Task identity: gMSA
+
+Have the customer's AD team create a dedicated gMSA and allow only the selected management server to retrieve its managed password. On Windows Server, install the AD PowerShell tools if needed and verify the account:
+
+```powershell
+Install-WindowsFeature RSAT-AD-PowerShell
+Install-ADServiceAccount gmsaIntunePU
+Test-ADServiceAccount gmsaIntunePU
+```
+
+`Test-ADServiceAccount` should return `True`. The production script itself does not query on-premises AD; the AD module is only needed here if the customer uses it to install/test the gMSA.
+
 Recommended layout:
 
 ```text
