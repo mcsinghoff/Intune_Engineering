@@ -131,15 +131,32 @@ Use:
 Set-NewPrimaryUserForDevices-AppReg.ps1
 ```
 
-Use this after the delegated workflow has been validated. It authenticates app-only with a certificate and is designed for scheduled unattended execution.
+Use this after the delegated workflow has been validated. It authenticates app-only with a certificate, queries Defender XDR directly, and is designed for scheduled unattended execution.
 
 Normal production behavior:
-- conservative logon thresholds;
-- installer-account safety check;
+- 30-day lookback with conservative logon/dominance thresholds;
+- only current Primary Users matching `installerXY` are eligible;
 - report-only run before enabling changes;
 - limited `MaxChanges`;
-- transcript and CSV audit output;
-- scheduled execution with a dedicated service identity.
+- read-back verification after every write;
+- transcript, CSV and `PrimaryUserCorrection-LastRun.json` output;
+- exit codes 0/1/2 for monitoring;
+- daily Scheduled Task with a dedicated gMSA.
+
+Register the daily task with:
+
+```powershell
+.\tools\Register-PrimaryUserScheduledTask.ps1 `
+    -TenantId "<tenant-id>" `
+    -ClientId "<application-client-id>" `
+    -CertificateThumbprint "<certificate-thumbprint>" `
+    -TaskIdentity "CONTOSO\gmsaIntunePU$" `
+    -CandidateUpnSuffix "customer.tld" `
+    -DailyAt "03:00" `
+    -MaxChanges 25
+```
+
+Add `-Apply` only after report-only results have been reviewed. Add `-RequireSignedScript` when the customer has signed the production script with a trusted enterprise Authenticode certificate.
 
 ## Which script should I use?
 
@@ -150,7 +167,7 @@ Normal production behavior:
 | Test automatic candidate detection interactively | `Set-NewPrimaryUserForDevices-DelegatedPermissions.ps1` | `-WhatIf` |
 | Review candidate decisions | Generated result CSV | Read-only |
 | Run unattended production automation | `Set-NewPrimaryUserForDevices-AppReg.ps1` | omit `-Apply` |
-| Process a manually reviewed hunting CSV | `Set-NewPrimaryUserForDevices-AppReg-UploadCSV.ps1` | omit `-Apply` |
+| Legacy/manual reviewed CSV path (not recommended for daily production) | `Set-NewPrimaryUserForDevices-AppReg-UploadCSV.ps1` | omit `-Apply` |
 
 ## Recommended operating sequence
 
