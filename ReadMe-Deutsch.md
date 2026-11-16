@@ -88,6 +88,18 @@ Microsoft Graph Authentication installieren:
 Install-Module Microsoft.Graph.Authentication -Scope AllUsers
 ```
 
+### Empfohlene Scheduled-Task-Identität: gMSA
+
+Die AD-Verantwortlichen des Kunden erstellen eine dedizierte gMSA und erlauben nur dem vorgesehenen Managementserver, das verwaltete Kennwort abzurufen. Auf Windows Server bei Bedarf die AD-PowerShell-Werkzeuge installieren und die gMSA prüfen:
+
+```powershell
+Install-WindowsFeature RSAT-AD-PowerShell
+Install-ADServiceAccount gmsaIntunePU
+Test-ADServiceAccount gmsaIntunePU
+```
+
+`Test-ADServiceAccount` sollte `True` liefern. Das Produktionsskript selbst fragt das lokale Active Directory nicht ab; das AD-Modul wird hier nur benötigt, wenn der Kunde es zur Installation/Prüfung der gMSA verwendet.
+
 Empfohlene Verzeichnisstruktur:
 
 ```text
