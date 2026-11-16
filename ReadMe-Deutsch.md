@@ -182,6 +182,8 @@ Die Lösung enthält inzwischen folgende Schutzmaßnahmen:
 
 Diese Maßnahmen reduzieren versehentlichen Missbrauch und Manipulation durch die Service-Identität, machen eine unsignierte `.ps1` aber nicht manipulationssicher.
 
+`DeviceManagementManagedDevices.ReadWrite.All` ist eine tenantweite Application Permission und deutlich breiter als nur das Ändern des Primary User. Die `installerXY`-Prüfungen im Skript sind deshalb fachliche Guardrails und keine Entra-Autorisierungsgrenze. Wird das App-Credential oder ein Administrator des Ausführungsservers kompromittiert, könnte das Credential innerhalb seiner Graph-Berechtigungen auch außerhalb dieses Skripts missbraucht werden. Server, Private Key, App-Owner und lokale Administratorengruppe müssen entsprechend geschützt werden.
+
 ### Empfohlene zusätzliche Code-Integrity-Härtung
 
 Für Produktion das Skript mit einem **separaten unternehmensweiten Authenticode Code-Signing-Zertifikat** signieren. Das Graph-Client-Zertifikat nicht dafür wiederverwenden.
