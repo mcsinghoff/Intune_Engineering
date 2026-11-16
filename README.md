@@ -182,6 +182,8 @@ The solution now includes these safeguards:
 
 These controls protect against accidental misuse and service-account modification, but they do **not** make an unsigned `.ps1` tamper-proof.
 
+`DeviceManagementManagedDevices.ReadWrite.All` is a tenant-wide application permission and is broader than only changing Primary User. The script's `installerXY` checks are therefore application guardrails, not an Entra authorization boundary. If the app credential or an administrator on the execution server is compromised, the credential could potentially be used outside this script within its granted Graph permissions. Protect the server, certificate private key, app owners and local administrator group accordingly.
+
 ### Recommended code-integrity hardening
 
 For production, sign the production script with a **separate enterprise Authenticode code-signing certificate**. Do not reuse the Graph client-authentication certificate.
