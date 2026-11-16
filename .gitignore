@@ -1,0 +1,11 @@
+# Customer/runtime artifacts
+*.pfx
+*.p12
+*.key
+tools/*.cer
+
+# Primary User automation output
+PrimaryUserCorrection-Test/
+PrimaryUserCorrection-Result-*.csv
+PrimaryUserCorrection-*.log
+PrimaryUserCorrection-LastRun.json
