@@ -1,409 +1,269 @@
 # Intune Primary User Automation
 
-This repository contains PowerShell tooling that determines the real primary user of a Windows
-device from Microsoft Defender XDR logon telemetry and corrects the Primary User relationship in
-Microsoft Intune. The production entry point is `Set-NewPrimaryUserForDevices-AppReg.ps1`.
+> Deutsch: [ReadMe-Deutsch.md](ReadMe-Deutsch.md)
 
-The production script runs unattended with a Microsoft Entra app registration and certificate. It
-queries Defender XDR directly; it does **not** require a manually exported or uploaded CSV file.
-CSV files in the log directory are output reports only.
+This repository contains the production deployment for automatically correcting Microsoft Intune **Primary User** assignments when Windows devices were initially enrolled with installer accounts such as `installer99@customer.tld`.
 
-For a short operator-focused explanation of which command to use at each stage, see [`COMMAND-GUIDE.md`](COMMAND-GUIDE.md).
+The customer production entry point is `Set-NewPrimaryUserForDevices-AppReg.ps1`. It is designed for unattended daily execution on a Windows management server. The delegated and CSV scripts are retained for testing/troubleshooting and are not the recommended daily scheduler.
 
-## Architecture
+## Production architecture
 
 ```text
-Windows Task Scheduler identity (gMSA or dedicated service account)
-    -> reads the local certificate private key
-    -> authenticates as the Entra app registration
-    -> runs Defender XDR Advanced Hunting
-    -> resolves the candidate in Entra ID
-    -> finds the matching Intune managed device
-    -> changes and verifies the Intune Primary User relationship
+Windows Scheduled Task (preferably gMSA)
+        |
+        | reads non-exportable certificate private key
+        v
+Entra app registration
+        |
+        +--> Defender XDR Advanced Hunting (DeviceInfo + DeviceLogonEvents)
+        +--> Entra ID user validation
+        +--> Intune managedDevice lookup
+               read Primary User
+               change only installerXY -> dominant real user
+               read back and verify
 ```
 
-The Windows identity and app registration have different responsibilities:
+The Windows task identity starts PowerShell, reads the certificate private key and writes logs. The Entra app registration owns the Microsoft Graph application permissions. No interactive administrator sign-in is required during daily operation.
 
-- The Windows identity starts PowerShell, reads the certificate private key, and writes logs.
-- The app registration is the cloud identity authorized to query Defender XDR and update Intune.
-- No interactive administrator sign-in is required at runtime.
+## Candidate logic and safety
 
-## Device prerequisites
+The production script intentionally does **not** assign the last person who logged on. It selects the dominant qualifying user over a lookback window so that technicians, admins or one-time logons do not become Primary User.
 
-Every device processed by the automation must exist in all three services:
+| Setting | Production default |
+| --- | ---: |
+| Lookback | 30 days |
+| Minimum qualifying logons | 5 |
+| Minimum active days | 3 |
+| Minimum dominance ratio over runner-up | 2.0 |
+| Maximum changes per run | 25 |
+| RDP / RemoteInteractive logons | Excluded |
+| Eligible current Primary User | `(?i)^installer[0-9]{2}@` |
 
-| Service | Required state | Why it is needed |
+Only devices whose **actual Intune Primary User relationship** matches `installerXY` are eligible. If that relationship is empty or ambiguous, the script refuses the automatic write.
+
+## End-device prerequisites
+
+Each target device must exist and be healthy in all three services:
+
+| Service | Required state | Why |
 | --- | --- | --- |
-| Microsoft Entra ID | Joined or hybrid joined | Supplies the Entra device ID used to correlate records |
-| Microsoft Intune | Fully MDM-enrolled Windows managed device | Owns the Primary User relationship that is changed |
-| Microsoft Defender for Endpoint | Onboarded and reporting telemetry | Populates `DeviceInfo` and `DeviceLogonEvents` |
+| Microsoft Entra ID | Entra joined or hybrid joined | Device identity/correlation |
+| Microsoft Intune | Fully MDM-enrolled Windows managed device | Owns the Primary User relationship |
+| Microsoft Defender for Endpoint | Onboarded and reporting | Supplies `DeviceInfo` and `DeviceLogonEvents` |
 
-A device displayed in Intune with **Managed by: MDE** is managed only through Defender for Endpoint
-Security Settings Management. It is not a full Intune MDM enrollment and might not have an Intune
-Primary User relationship. It is therefore insufficient for this automation.
+A device visible only as **Managed by MDE** through Defender Security Settings Management is not sufficient. The automation requires a normal Intune `managedDevice` record.
 
-The `AADLoginForWindows` Azure VM extension joins a VM to Entra ID so that Entra users can sign in.
-Do not treat that join alone as proof of Intune enrollment. Confirm that the device has a normal
-Intune managed-device record, an MDM check-in time, and an available Primary User relationship.
+## 1. Prepare the customer tenant
 
-### Verify Entra join and Intune enrollment
+Create a dedicated single-tenant App Registration, for example `Intune-PrimaryUser-Automation`.
 
-Run these commands in a non-elevated PowerShell session of the Entra user that performs enrollment:
+Add these **Microsoft Graph Application permissions** and grant tenant-wide admin consent:
 
-```powershell
-whoami
+| Permission | Type | Purpose |
+| --- | --- | --- |
+| `ThreatHunting.Read.All` | Application | Run Defender XDR Advanced Hunting without a signed-in user |
+| `DeviceManagementManagedDevices.ReadWrite.All` | Application | Read Intune managed devices and update Primary User |
+| `User.Read.All` | Application | Resolve and validate candidate users |
 
-dsregcmd /status |
-    Select-String -Pattern 'AzureAdJoined|DomainJoined|WorkplaceJoined|AzureAdPrt|IsUserAzureAD|TenantId|MdmUrl|Executing Account Name'
-```
+Do not add broader permissions unless the design changes. Record the Directory (tenant) ID and Application (client) ID.
 
-Expected for an Entra-joined device and Entra user session:
+Microsoft references:
+- https://learn.microsoft.com/graph/permissions-reference
+- https://learn.microsoft.com/graph/api/security-security-runhuntingquery
+- https://learn.microsoft.com/intune/developer/configure-graph-api-access
 
-```text
-AzureAdJoined         : YES
-AzureAdPrt            : YES
-IsUserAzureAD         : YES
-TenantId              : <customer-tenant-id>
-MdmUrl                : https://enrollment.manage.microsoft.com/...
-Executing Account Name: AzureAD\<user>
-```
+## 2. Prepare the management server
 
-An MDM URL shows that enrollment is available; it does not prove that enrollment completed. Verify
-the Intune enrollment tasks and events:
+Recommended:
+- Windows Server 2019/2022/2025 or a controlled Windows management server
+- PowerShell 7
+- outbound HTTPS/443 to Microsoft Graph, Entra ID, Intune and Defender XDR endpoints
+- dedicated gMSA for the Scheduled Task
+- no interactive use of the gMSA
+- tightly controlled local administrator membership
 
-```powershell
-Get-ScheduledTask |
-    Where-Object TaskPath -Like '\Microsoft\Windows\EnterpriseMgmt\*' |
-    Select-Object TaskName, State
-
-Get-WinEvent `
-    -FilterHashtable @{
-        LogName = 'Microsoft-Windows-DeviceManagement-Enterprise-Diagnostics-Provider/Admin'
-        Id      = 75, 76
-    } `
-    -MaxEvents 20 `
-    -ErrorAction SilentlyContinue |
-    Select-Object TimeCreated, Id, LevelDisplayName, Message |
-    Format-List
-```
-
-- Event 75 means enrollment succeeded.
-- Event 76 contains the enrollment failure code.
-- No EnterpriseMgmt task and no 75/76 event normally means enrollment was never initiated.
-
-For an already Entra-joined Windows client, the built-in manual MDM enrollment UI can be launched
-from the licensed Entra user's non-elevated session:
-
-```powershell
-Start-Process explorer.exe -ArgumentList 'ms-device-enrollment:?mode=mdm'
-```
-
-The enrolling user must be in the Intune MDM user scope, be allowed by Windows enrollment
-restrictions, remain below the configured device limit, and have the base **Microsoft Intune Plan 1**
-service enabled. Intune Plan 2 is additive to Plan 1 and is not a replacement for the base MDM
-license. Microsoft 365 E5 includes Intune Plan 1; Office 365 E5 does not.
-
-### Verify Defender for Endpoint onboarding
-
-An enabled Microsoft Defender Antivirus and a running `Sense` service do not by themselves prove
-that the device is onboarded to Defender for Endpoint. Deploy an Intune **Endpoint detection and
-response** onboarding policy after Intune enrollment, or use the Defender local onboarding script
-for a small lab test.
-
-```powershell
-Get-Service Sense
-
-Get-ItemProperty `
-    'HKLM:\SOFTWARE\Microsoft\Windows Advanced Threat Protection\Status' `
-    -ErrorAction SilentlyContinue |
-    Select-Object OnboardingState, OrgId
-```
-
-`OnboardingState` must be `1`. Verify telemetry in Defender XDR Advanced Hunting:
-
-```kusto
-DeviceInfo
-| where DeviceName startswith "TEST-WIN11"
-| summarize arg_max(Timestamp, *) by DeviceId
-| project Timestamp, DeviceName, DeviceId, AadDeviceId, OnboardingStatus, SensorHealthState
-```
-
-## Server prerequisites
-
-- Windows Server or Windows client that can run a scheduled task
-- PowerShell 7 recommended
-- Network access to Microsoft Graph, Intune, Entra ID, and Defender for Endpoint endpoints
-- Microsoft Defender for Endpoint licensing and Advanced Hunting telemetry
-- Microsoft Intune licensing and fully enrolled target devices
-- Permission to create an Entra app registration and grant tenant-wide admin consent
-
-Install the only required Microsoft Graph module from an elevated PowerShell session:
+Install the Graph authentication module:
 
 ```powershell
 Install-Module Microsoft.Graph.Authentication -Scope AllUsers
 ```
 
-## App registration
+Recommended layout:
 
-Create a single-tenant app registration in the **customer tenant**. Do not reuse a certificate or
-app registration from a different customer or test tenant.
+```text
+C:\Automation\IntunePrimaryUser\
+    Set-NewPrimaryUserForDevices-AppReg.ps1
+    tools\
 
-1. Open Microsoft Entra admin center.
-2. Go to **Identity > Applications > App registrations > New registration**.
-3. Use a descriptive name such as `Intune-PrimaryUser-Automation`.
-4. Select **Accounts in this organizational directory only**.
-5. Record the **Application (client) ID** and **Directory (tenant) ID**.
-6. Under **API permissions**, add these Microsoft Graph **Application permissions**:
+C:\ProgramData\IntunePrimaryUserCorrection\
+    Logs\
+    Status\
+```
 
-| Permission | Type | Purpose |
-| --- | --- | --- |
-| `ThreatHunting.Read.All` | Application | Run the Defender XDR Advanced Hunting query |
-| `DeviceManagementManagedDevices.ReadWrite.All` | Application | Read managed devices and update Primary User relationships |
-| `User.Read.All` | Application | Resolve and validate candidate users |
+## 3. Create the application certificate
 
-7. Select **Grant admin consent** and confirm that all three permissions show granted status.
-
-Delegated permissions are not used by the unattended script. No user is expected to sign in during
-scheduled execution.
-
-## Certificate setup
-
-Create the certificate on the server that will run the scheduled task. Run an elevated PowerShell
-session from the repository root:
+Create the client-authentication certificate **on the execution server**:
 
 ```powershell
 .\tools\Create-Cert.ps1
 ```
 
-The helper creates:
+The helper creates an RSA/SHA-256 certificate in `Cert:\LocalMachine\My`, uses a **non-exportable** private key, and exports only the public `.cer` file.
 
-- A two-year RSA certificate with a non-exportable private key in `Cert:\LocalMachine\My`.
-- The public certificate `C:\Automation\Intune-PrimaryUser-Automation.cer`.
-- The certificate thumbprint printed to the console.
+Upload only the CER under:
 
-Upload only the `.cer` file under the app registration's **Certificates & secrets > Certificates**.
-The `.cer` contains only the public key. The private key stays in the Windows certificate store and
-does not need to be exported. Never commit or distribute a `.pfx` file or private key.
-
-Verify the certificate:
-
-```powershell
-$thumbprint = '<certificate-thumbprint>'
-
-Get-Item "Cert:\LocalMachine\My\$thumbprint" |
-    Format-List Subject, Thumbprint, HasPrivateKey, NotBefore, NotAfter
+```text
+Entra admin center
+> App registrations
+> Intune-PrimaryUser-Automation
+> Certificates & secrets
+> Certificates
 ```
 
-`HasPrivateKey` must be `True`.
+Then grant the Scheduled Task gMSA **Read** permission on the certificate private key using `certlm.msc` > Personal > Certificates > All Tasks > Manage Private Keys.
 
-Grant the scheduled-task identity read access to the private key:
+The production script checks that the certificate exists, has an accessible private key, is currently valid, and warns when expiry is less than 30 days away.
 
-1. Run `certlm.msc`.
-2. Open **Personal > Certificates**.
-3. Right-click `Intune-PrimaryUser-Automation`.
-4. Select **All Tasks > Manage Private Keys**.
-5. Add the Windows task identity, for example `CONTOSO\gmsaIntunePU$`.
-6. Grant **Read** only.
+## 4. Lock down the filesystem
 
-The script searches `LocalMachine\My` first and `CurrentUser\My` second. It signs a test payload
-before connecting to Graph, so an inaccessible or public-only certificate fails with a clear error.
+The task identity must **not** be able to modify its own production code.
 
-## How candidate selection works
-
-The script queries successful logons from `DeviceLogonEvents` and correlates them with the newest
-`DeviceInfo` record. The defaults are deliberately conservative:
-
-| Parameter | Default | Meaning |
-| --- | ---: | --- |
-| `LookbackDays` | 30 | Defender telemetry window |
-| `MinCandidateLogonCount` | 5 | Minimum successful logons by the winning user |
-| `MinCandidateActiveDays` | 3 | Minimum distinct days with successful logons |
-| `MinDominanceRatio` | 2.0 | Winner must have twice the runner-up's logons |
-| `MaxChanges` | 25 | Maximum writes in one execution |
-
-Only `Interactive` and `CachedInteractive` logons are considered by default. RDP
-`RemoteInteractive` logons are ignored so that support and administrator sessions do not become the
-Primary User. `-IncludeRemoteInteractive` exists for controlled lab testing and exceptional designs.
-
-The query excludes installer, deployment, service, system, machine, and common administrator
-accounts, including `localadmin*`. A candidate must resolve to exactly one enabled Entra user by UPN,
-on-premises SID, or the optional `CandidateUpnSuffix` fallback.
-
-Even a valid candidate is changed only when all safety checks pass:
-
-- Exactly one Intune managed device matches the Defender device.
-- The device is Windows.
-- The current Primary User is present and matches `InstallerPrimaryUserRegex`.
-- The candidate differs from the current Primary User.
-- The run uses `-Apply` and has not reached `MaxChanges`.
-- The changed relationship can be read back and verified.
-
-## First test: report-only
-
-The default mode never writes to Intune:
+Example:
 
 ```powershell
-.\Set-NewPrimaryUserForDevices-AppReg.ps1 `
-    -TenantId '<tenant-id>' `
-    -ClientId '<application-client-id>' `
-    -CertificateThumbprint '<certificate-thumbprint>' `
-    -CandidateUpnSuffix 'contoso.com' `
-    -LogPath 'C:\ProgramData\IntunePrimaryUserCorrection\Logs' `
-    -MaxChanges 1
+$scriptRoot = "C:\Automation\IntunePrimaryUser"
+$runtimeRoot = "C:\ProgramData\IntunePrimaryUserCorrection"
+$gmsa = "CONTOSO\gmsaIntunePU$"
+
+icacls $scriptRoot /inheritance:r
+icacls $scriptRoot /grant:r `
+    "*S-1-5-18:(OI)(CI)F" `
+    "*S-1-5-32-544:(OI)(CI)F" `
+    "$gmsa:(OI)(CI)RX"
+
+icacls $runtimeRoot /inheritance:r
+icacls $runtimeRoot /grant:r `
+    "*S-1-5-18:(OI)(CI)F" `
+    "*S-1-5-32-544:(OI)(CI)F" `
+    "$gmsa:(OI)(CI)M"
 ```
 
-Review the result CSV and investigate every `Error` row. Expected safe actions include:
+Result: SYSTEM and local Administrators retain Full Control; the gMSA receives only Read/Execute on code and Modify on runtime logs/status. Test ACL changes before removing inheritance in a customer environment.
 
-- `WouldChange`: all checks passed, but report-only mode prevented the write.
-- `Skipped`: a documented safety condition prevented the write.
-- `Error`: infrastructure, identity resolution, or ambiguous data requires attention.
+## 5. Tamper protection and misuse
 
-### Lab thresholds
+No PowerShell script can be made absolutely unchangeable to a compromised local Administrator or SYSTEM account. Treat the management server's administrator boundary as a security boundary.
 
-A new lab device cannot satisfy the production default of three active days. For a one-day test,
-reduce thresholds and keep the run report-only:
+The solution now includes these safeguards:
+
+- non-exportable application certificate private key;
+- gMSA itself has no Microsoft Graph role;
+- automatic writes only when current Primary User matches `installerXY`;
+- telemetry thresholds and dominance check;
+- `MaxChanges` batch limit;
+- no fallback from an empty Primary User relationship to another Intune user property;
+- every write is read back and verified;
+- CSV, transcript and machine-readable LastRun JSON are written for every run;
+- the service identity should have no write permission to the code directory.
+
+These controls protect against accidental misuse and service-account modification, but they do **not** make an unsigned `.ps1` tamper-proof.
+
+### Recommended code-integrity hardening
+
+For production, sign the production script with a **separate enterprise Authenticode code-signing certificate**. Do not reuse the Graph client-authentication certificate.
+
+The Scheduled Task helper supports `-RequireSignedScript`. It then refuses registration if the production script's Authenticode signature is not valid and launches PowerShell with `AllSigned`.
+
+PowerShell execution policy is defense in depth, not a security boundary. For stronger enforcement use **App Control for Business (WDAC)** or the customer's existing application-control platform, allow only approved Microsoft/internal signers, and test in audit mode before enforcement.
+
+## 6. Run report-only first
+
+Do not enable writes immediately:
 
 ```powershell
 .\Set-NewPrimaryUserForDevices-AppReg.ps1 `
-    -TenantId '<tenant-id>' `
-    -ClientId '<application-client-id>' `
-    -CertificateThumbprint '<certificate-thumbprint>' `
-    -CandidateUpnSuffix 'contoso.com' `
-    -LogPath 'C:\ProgramData\IntunePrimaryUserCorrection\Logs' `
-    -LookbackDays 7 `
-    -MinCandidateLogonCount 1 `
-    -MinCandidateActiveDays 1 `
-    -MinDominanceRatio 1.1 `
-    -IncludeRemoteInteractive `
-    -MaxChanges 1
+    -TenantId "<tenant-id>" `
+    -ClientId "<application-client-id>" `
+    -CertificateThumbprint "<certificate-thumbprint>" `
+    -CandidateUpnSuffix "customer.tld" `
+    -LogPath "C:\ProgramData\IntunePrimaryUserCorrection\Logs" `
+    -StatusPath "C:\ProgramData\IntunePrimaryUserCorrection\Status" `
+    -MaxChanges 25
 ```
 
-Remove `-IncludeRemoteInteractive` and restore production thresholds after lab validation.
+Review the CSV output:
+- `WouldChange`: all checks passed; report-only prevented the write.
+- `Skipped`: a safety condition prevented a write.
+- `Error`: investigate before enabling `-Apply`.
 
-## Apply changes
+Recommended: run several days in report-only mode.
 
-After reviewing `WouldChange` rows, start with a small limit:
+## 7. Register the daily Scheduled Task
+
+The repository includes `tools\Register-PrimaryUserScheduledTask.ps1`.
+
+Report-only example:
 
 ```powershell
-.\Set-NewPrimaryUserForDevices-AppReg.ps1 `
-    -TenantId '<tenant-id>' `
-    -ClientId '<application-client-id>' `
-    -CertificateThumbprint '<certificate-thumbprint>' `
-    -CandidateUpnSuffix 'contoso.com' `
-    -LogPath 'C:\ProgramData\IntunePrimaryUserCorrection\Logs' `
-    -MaxChanges 2 `
-    -Apply
+.\tools\Register-PrimaryUserScheduledTask.ps1 `
+    -TenantId "<tenant-id>" `
+    -ClientId "<application-client-id>" `
+    -CertificateThumbprint "<certificate-thumbprint>" `
+    -TaskIdentity "CONTOSO\gmsaIntunePU$" `
+    -CandidateUpnSuffix "customer.tld" `
+    -DailyAt "03:00" `
+    -MaxChanges 25
 ```
 
-Increase `MaxChanges` only after the result has been verified in Intune. Adjust
-`InstallerPrimaryUserRegex` when the customer's installer UPNs use a different naming convention.
+After report review, register again with `-Apply`. If the script has a valid enterprise Authenticode signature, additionally use `-RequireSignedScript`.
 
-## Scheduled task identity
+The helper deliberately does not grant NTFS or private-key permissions. Those are explicit customer security decisions.
 
-Use a dedicated, least-privileged Windows service identity. In a traditional Active Directory
-environment, a group Managed Service Account (gMSA) is recommended because AD rotates its password
-automatically. The gMSA itself receives no Graph permissions.
+## Monitoring and exit codes
 
-The task identity needs only:
+Every run creates:
+- `PrimaryUserCorrection-<timestamp>.log`
+- `PrimaryUserCorrection-Result-<timestamp>.csv`
+- `PrimaryUserCorrection-LastRun.json`
 
-- Log on as a batch job.
-- Read access to the script directory.
-- Modify access to the log directory.
-- Read access to the certificate private key.
+| Exit code | Meaning |
+| ---: | --- |
+| 0 | Completed without per-device errors |
+| 1 | Fatal run failure |
+| 2 | Completed, but at least one device produced an Error row |
 
-It does not need to be a local administrator.
+Recommended alerts:
+- Scheduled Task result 1 or 2
+- LastRun JSON older than 26 hours
+- certificate expiry < 30 days
+- unexpected increase in `Error` or `Skipped`
+- repeated runs close to `MaxChanges`
 
-Example folder permissions:
+## Customer rollout checklist
 
-```powershell
-icacls 'C:\Automation\IntunePrimaryUser' /grant 'CONTOSO\gmsaIntunePU$:(OI)(CI)RX'
-icacls 'C:\ProgramData\IntunePrimaryUserCorrection' /grant 'CONTOSO\gmsaIntunePU$:(OI)(CI)M'
-```
-
-## Windows Task Scheduler
-
-Register the task with PowerShell so no interactive password prompt is required for a gMSA:
-
-```powershell
-$arguments = @(
-    '-NoLogo'
-    '-NoProfile'
-    '-NonInteractive'
-    '-ExecutionPolicy RemoteSigned'
-    '-File "C:\Automation\IntunePrimaryUser\Set-NewPrimaryUserForDevices-AppReg.ps1"'
-    '-TenantId "<tenant-id>"'
-    '-ClientId "<application-client-id>"'
-    '-CertificateThumbprint "<certificate-thumbprint>"'
-    '-CandidateUpnSuffix "contoso.com"'
-    '-LogPath "C:\ProgramData\IntunePrimaryUserCorrection\Logs"'
-    '-MaxChanges 25'
-    '-Apply'
-) -join ' '
-
-$action = New-ScheduledTaskAction `
-    -Execute 'C:\Program Files\PowerShell\7\pwsh.exe' `
-    -Argument $arguments
-
-$trigger = New-ScheduledTaskTrigger -Daily -At '03:00'
-
-$principal = New-ScheduledTaskPrincipal `
-    -UserId 'CONTOSO\gmsaIntunePU$' `
-    -LogonType Password
-
-$settings = New-ScheduledTaskSettingsSet `
-    -StartWhenAvailable `
-    -MultipleInstances IgnoreNew `
-    -ExecutionTimeLimit (New-TimeSpan -Hours 1)
-
-Register-ScheduledTask `
-    -TaskName 'Intune Primary User Correction' `
-    -Action $action `
-    -Trigger $trigger `
-    -Principal $principal `
-    -Settings $settings
-```
-
-Run once in report-only mode before adding `-Apply` to the scheduled arguments.
-
-## Logs and results
-
-Each execution creates:
-
-- `PrimaryUserCorrection-<timestamp>.log`: PowerShell transcript.
-- `PrimaryUserCorrection-Result-<timestamp>.csv`: structured decisions and errors.
-
-The result CSV is an audit artifact, not an input file. Protect the log directory and define a
-retention period appropriate for the customer because device and user identifiers are included.
-
-## Troubleshooting
-
-| Symptom | Likely cause or action |
-| --- | --- |
-| `Der Schluesselsatz ist nicht vorhanden` / `Keyset does not exist` | The task identity cannot read the private key. Grant Read under **Manage Private Keys**. |
-| Certificate found but `HasPrivateKey` is false | A public `.cer` was imported. Create the certificate on the execution server; do not use the CER as a private credential. |
-| `0 high-confidence device candidate(s)` | Device not onboarded to MDE, no qualifying logons, production thresholds not yet reached, or only RDP logons occurred. |
-| Local account cannot be resolved | Local accounts are not Entra users. Use a real Entra end user and ensure local admin patterns are excluded. |
-| No Intune managed device matched | Device is not fully MDM-enrolled, Entra/Defender IDs do not correlate, or it is visible only as **Managed by: MDE**. |
-| Device is Entra joined but absent from Intune | Check the enrolling user's Intune service plan, MDM scope, enrollment restrictions, device limit, EnterpriseMgmt tasks, and events 75/76. |
-| Device is absent from Defender `DeviceInfo` | Deploy MDE onboarding and verify `OnboardingState = 1`, SENSE events, and network connectivity. |
-| Candidate appears only with `-IncludeRemoteInteractive` | All observed user logons are RDP `RemoteInteractive` events. Use console logons or explicitly accept that design. |
+1. Validate Intune MDM and MDE coverage.
+2. Create the single-purpose App Registration.
+3. Add only the three documented Application permissions and grant admin consent.
+4. Prepare the management server and gMSA.
+5. Create the non-exportable client certificate and upload its CER.
+6. Grant gMSA Read on the private key.
+7. Lock down code/runtime NTFS permissions.
+8. Run app-only report-only for several days.
+9. Review all `WouldChange`, `Skipped` and `Error` rows.
+10. Start production writes with `MaxChanges 5`.
+11. Verify changes in Intune.
+12. Increase to the agreed production batch size, for example 25.
+13. Register the daily Scheduled Task.
+14. Add monitoring and certificate-renewal ownership.
+15. Optionally enforce Authenticode + App Control for Business.
 
 ## Repository layout
 
-- `Set-NewPrimaryUserForDevices-AppReg.ps1`: unattended, direct-KQL production workflow.
-- `Set-NewPrimaryUserForDevices-DelegatedPermissions.ps1`: interactive delegated-permission workflow.
-- `Set-IntunePrimaryUserSingleDevice.ps1`: controlled single-device testing.
-- `Old_Set-NewPrimaryUserForDevices-DelegatedPermissions.ps1`: preserved legacy implementation.
-- `Create-AzResources-PrimaryUserChange.ps1`: Azure VM lab helper; review tenant-specific values before use.
-- `tools/Create-Cert.ps1`: creates the local-machine certificate and exports its public CER.
-
-## Microsoft documentation
-
-- [Run an Advanced Hunting query with Microsoft Graph](https://learn.microsoft.com/graph/api/security-security-runhuntingquery)
-- [Microsoft Graph PowerShell certificate authentication](https://learn.microsoft.com/powershell/microsoftgraph/authentication-commands)
-- [Microsoft Graph permissions reference](https://learn.microsoft.com/graph/permissions-reference)
-- [Windows device enrollment guide for Intune](https://learn.microsoft.com/intune/device-enrollment/windows/guide)
-- [Deploy an Endpoint detection and response policy with Intune](https://learn.microsoft.com/intune/device-configuration/endpoint-security/deploy-edr)
-- [Defender XDR `DeviceLogonEvents` schema](https://learn.microsoft.com/defender-xdr/advanced-hunting-devicelogonevents-table)
-- [Manage group Managed Service Accounts](https://learn.microsoft.com/windows-server/identity/ad-ds/manage/group-managed-service-accounts/group-managed-service-accounts/manage-group-managed-service-accounts)
-
+- `Set-NewPrimaryUserForDevices-AppReg.ps1` — production unattended direct-Defender workflow.
+- `Set-NewPrimaryUserForDevices-DelegatedPermissions.ps1` — interactive validation/troubleshooting.
+- `Set-IntunePrimaryUserSingleDevice.ps1` — explicit single-device test.
+- `Set-NewPrimaryUserForDevices-AppReg-UploadCSV.ps1` — legacy/manual CSV workflow; not recommended for daily production.
+- `Create-AzResources-PrimaryUserChange.ps1` — Azure lab helper.
+- `tools/Create-Cert.ps1` — customer app-authentication certificate helper.
+- `tools/Register-PrimaryUserScheduledTask.ps1` — daily gMSA Scheduled Task registration helper.
+- `COMMAND-GUIDE.md` — concise operator command guide.
