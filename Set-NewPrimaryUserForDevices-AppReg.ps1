@@ -1,74 +1,101 @@
 <#
 .SYNOPSIS
-    Corrects Intune Primary Users from Defender XDR logon telemetry without an interactive sign-in.
+    Corrects Microsoft Intune Primary User assignments from Microsoft Defender XDR logon telemetry.
 
 .DESCRIPTION
-    Runs a Defender XDR Advanced Hunting query, ranks successful local interactive logons per
-    Windows client, resolves the winning account in Microsoft Entra ID, and changes the Intune
-    Primary User only when the current assignment matches an installer-account pattern.
+    Production-oriented unattended automation for Windows devices that were initially enrolled with
+    an installer account such as installer99@customer.tld.
 
-    Authentication is app-only with a certificate. The default mode is report-only; -Apply is
-    required before any Intune relationship is changed. RemoteInteractive (RDP) logons are ignored
-    unless -IncludeRemoteInteractive is explicitly supplied.
+    The script authenticates app-only to Microsoft Graph with a certificate, runs a Defender XDR
+    Advanced Hunting query, identifies the dominant real interactive user per Windows client,
+    validates the candidate in Microsoft Entra ID, finds the matching Intune managed device, and
+    changes the Intune Primary User only when the existing Primary User matches InstallerPrimaryUserRegex.
+
+    Report-only is the default. -Apply is required before any Intune relationship is changed.
+    RemoteInteractive (RDP) logons are excluded by default. Every write is read back and verified.
+
+    Exit codes:
+      0 = completed successfully with no per-device errors
+      1 = fatal run failure (authentication, hunting, module, filesystem, etc.)
+      2 = run completed but one or more device rows ended in Error
+
+    Each run writes a timestamped CSV result, a transcript, and a LastRun JSON status file for monitoring.
 
 .PARAMETER TenantId
     Microsoft Entra tenant ID.
 
 .PARAMETER ClientId
-    Application (client) ID of the app registration.
+    Application (client) ID of the single-tenant Entra app registration.
 
 .PARAMETER CertificateThumbprint
-    Thumbprint of a certificate, including its private key, installed for the service account that
-    runs this script. LocalMachine\My is recommended for a scheduled server task.
+    Thumbprint of the client-authentication certificate. The certificate must include a private key
+    accessible to the scheduled-task identity. LocalMachine\My is recommended.
+
+.PARAMETER LogPath
+    Directory for timestamped transcripts and CSV result reports.
+
+.PARAMETER StatusPath
+    Directory for the machine-readable PrimaryUserCorrection-LastRun.json monitoring file.
+
+.PARAMETER LookbackDays
+    Defender XDR logon lookback period. Default: 30.
+
+.PARAMETER MinCandidateLogonCount
+    Minimum number of successful qualifying logons for a candidate. Default: 5.
+
+.PARAMETER MinCandidateActiveDays
+    Minimum number of distinct days with qualifying logons. Default: 3.
+
+.PARAMETER MinDominanceRatio
+    When a runner-up exists, the winner must have at least this multiple of the runner-up logon count.
+    Default: 2.0.
+
+.PARAMETER InstallerPrimaryUserRegex
+    Regular expression that identifies installer Primary Users eligible for automatic correction.
+    LSW default: (?i)^installer[0-9]{2}@
 
 .PARAMETER CandidateUpnSuffix
-    Optional UPN suffix used only when Defender supplies neither a UPN-shaped account name nor a SID
-    that can be mapped to a synchronized Entra user.
+    Optional fallback UPN suffix when the candidate cannot be resolved from Defender UPN telemetry
+    or the synchronized on-premises SID.
+
+.PARAMETER MaxChanges
+    Maximum number of successful Primary User writes in one execution. Default: 25.
+
+.PARAMETER IncludeRemoteInteractive
+    Includes RDP RemoteInteractive logons. Not recommended for normal production operation because
+    support/admin RDP sessions can distort Primary User selection.
 
 .PARAMETER Apply
-    Enables changes. Without this switch, the script only reports WouldChange results.
+    Enables Intune writes. Without -Apply, qualifying rows are reported as WouldChange.
 
 .REQUIREMENTS
+    PowerShell 7 recommended.
     Microsoft.Graph.Authentication PowerShell module.
 
-    Microsoft Graph application permissions with admin consent:
+    Microsoft Graph application permissions with tenant-wide admin consent:
     - ThreatHunting.Read.All
     - DeviceManagementManagedDevices.ReadWrite.All
     - User.Read.All
 
 .EXAMPLE
     .\Set-NewPrimaryUserForDevices-AppReg.ps1 `
-        -TenantId "00000000-0000-0000-0000-000000000000" `
-        -ClientId "11111111-1111-1111-1111-111111111111" `
-        -CertificateThumbprint "ABCDEF1234567890" `
-        -CandidateUpnSuffix "contoso.com"
+        -TenantId "<tenant-id>" `
+        -ClientId "<application-client-id>" `
+        -CertificateThumbprint "<certificate-thumbprint>" `
+        -CandidateUpnSuffix "customer.tld"
 
     Runs a safe report-only pass.
 
 .EXAMPLE
     .\Set-NewPrimaryUserForDevices-AppReg.ps1 `
-        -TenantId "00000000-0000-0000-0000-000000000000" `
-        -ClientId "11111111-1111-1111-1111-111111111111" `
-        -CertificateThumbprint "ABCDEF1234567890" `
-        -CandidateUpnSuffix "contoso.com" `
+        -TenantId "<tenant-id>" `
+        -ClientId "<application-client-id>" `
+        -CertificateThumbprint "<certificate-thumbprint>" `
+        -CandidateUpnSuffix "customer.tld" `
+        -MaxChanges 5 `
         -Apply
 
-    Applies at most 25 high-confidence changes.
-
-### Test - Delete in the end from Synopsis
-.EXAMPLE 
-    .\Set-NewPrimaryUserForDevices-AppReg.ps1 `
-         -TenantId "ade56966-ae5b-4e8d-95c6-b84548490b80" `
-         -ClientId "5a84c8e4-e453-4d46-b3a8-06676f907cc4" `
-         -CertificateThumbprint "43acc1da1f27ff26c6354c7f33c8363345722b8c" `
-         -LogPath "C:\PrimaryUserCorrection\logs" `
-         -LookbackDays 7 `
-         -MinCandidateLogonCount 1 `
-         -MinCandidateActiveDays 1 `
-         -MinDominanceRatio 1.1 `
-         -IncludeRemoteInteractive `
-         -Apply `
-         -MaxChanges 1
+    Performs at most five verified Primary User changes.
 #>
 
 [CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = "Medium")]
@@ -87,6 +114,8 @@ param(
 
     [string]$LogPath = (Join-Path $env:ProgramData "IntunePrimaryUserCorrection\Logs"),
 
+    [string]$StatusPath = (Join-Path $env:ProgramData "IntunePrimaryUserCorrection\Status"),
+
     [ValidateRange(7, 90)]
     [int]$LookbackDays = 30,
 
@@ -100,7 +129,7 @@ param(
     [double]$MinDominanceRatio = 2.0,
 
     [ValidateNotNullOrEmpty()]
-    [string]$InstallerPrimaryUserRegex = "(?i)^(installer|deployment|intune-installer)[0-9_-]*@",
+    [string]$InstallerPrimaryUserRegex = "(?i)^installer[0-9]{2}@",
 
     [string]$CandidateUpnSuffix,
 
@@ -115,17 +144,24 @@ param(
 Set-StrictMode -Version 3.0
 $ErrorActionPreference = "Stop"
 
-if (-not (Test-Path -LiteralPath $LogPath)) {
-    New-Item -Path $LogPath -ItemType Directory -Force | Out-Null
+foreach ($pathToCreate in @($LogPath, $StatusPath)) {
+    if (-not (Test-Path -LiteralPath $pathToCreate)) {
+        New-Item -Path $pathToCreate -ItemType Directory -Force | Out-Null
+    }
 }
 
-$timestamp = Get-Date -Format "yyyyMMdd-HHmmss"
+$runStarted = Get-Date
+$timestamp = $runStarted.ToString("yyyyMMdd-HHmmss")
 $resultPath = Join-Path $LogPath "PrimaryUserCorrection-Result-$timestamp.csv"
 $transcriptPath = Join-Path $LogPath "PrimaryUserCorrection-$timestamp.log"
+$statusFilePath = Join-Path $StatusPath "PrimaryUserCorrection-LastRun.json"
 $results = [System.Collections.Generic.List[object]]::new()
 $changeCount = 0
+$candidateCount = 0
 $transcriptStarted = $false
 $runSucceeded = $false
+$fatalError = ""
+$exitCode = 1
 
 function Write-Info {
     param([Parameter(Mandatory = $true)][string]$Message)
@@ -169,6 +205,39 @@ function Add-Result {
         Action             = $Action
         Reason             = $Reason
     })
+}
+
+function Write-RunStatus {
+    param(
+        [Parameter(Mandatory = $true)][int]$ExitCode,
+        [string]$FatalError = ""
+    )
+
+    $wouldChangeCount = @($results | Where-Object Action -eq "WouldChange").Count
+    $skippedCount = @($results | Where-Object Action -eq "Skipped").Count
+    $errorCount = @($results | Where-Object Action -eq "Error").Count
+    $changedCount = @($results | Where-Object Action -eq "Changed").Count
+
+    $status = [PSCustomObject]@{
+        StartedAt       = $runStarted.ToString("o")
+        CompletedAt     = (Get-Date).ToString("o")
+        Mode            = $(if ($Apply) { "APPLY" } else { "REPORT-ONLY" })
+        ExitCode        = $ExitCode
+        Success         = ($ExitCode -eq 0)
+        CandidateCount  = $candidateCount
+        Changed         = $changedCount
+        WouldChange     = $wouldChangeCount
+        Skipped         = $skippedCount
+        Errors          = $errorCount
+        FatalError      = $FatalError
+        ResultCsv       = $resultPath
+        Transcript      = $transcriptPath
+        ScriptPath      = $PSCommandPath
+    }
+
+    $status |
+        ConvertTo-Json -Depth 5 |
+        Set-Content -LiteralPath $statusFilePath -Encoding UTF8
 }
 
 function Invoke-GraphRequestWithRetry {
@@ -379,6 +448,16 @@ function Get-ClientCertificate {
             continue
         }
 
+        $now = Get-Date
+        if ($certificate.NotBefore -gt $now -or $certificate.NotAfter -le $now) {
+            $accessErrors.Add("${certificatePath}: certificate is not currently valid. Validity: $($certificate.NotBefore) - $($certificate.NotAfter).")
+            continue
+        }
+
+        if ($certificate.NotAfter -lt $now.AddDays(30)) {
+            Write-Warning "Client certificate expires in less than 30 days: $($certificate.NotAfter)."
+        }
+
         $rsa = $null
         try {
             $rsa = [System.Security.Cryptography.X509Certificates.RSACertificateExtensions]::GetRSAPrivateKey($certificate)
@@ -430,7 +509,8 @@ try {
     Write-Info "Connected app-only to tenant $($context.TenantId). Mode: $(if ($Apply) { 'APPLY' } else { 'REPORT-ONLY' })."
 
     $rows = @(Invoke-PrimaryUserHuntingQuery)
-    Write-Info "Advanced Hunting returned $($rows.Count) high-confidence device candidate(s)."
+    $candidateCount = $rows.Count
+    Write-Info "Advanced Hunting returned $candidateCount high-confidence device candidate(s)."
 
     foreach ($row in $rows) {
         $deviceName = [string](Get-GraphValue -Object $row -Name "DeviceName")
@@ -469,9 +549,10 @@ try {
 
             $primaryUsers = @(Get-IntunePrimaryUser -ManagedDeviceId $managedDeviceId)
             if ($primaryUsers.Count -gt 1) { throw "Intune returned multiple primary-user relationships; manual review is required." }
-            if ($primaryUsers.Count -eq 1) { $currentPrimaryUpn = [string](Get-GraphValue -Object $primaryUsers[0] -Name "userPrincipalName") }
-            if ([string]::IsNullOrWhiteSpace($currentPrimaryUpn)) { $currentPrimaryUpn = [string](Get-GraphValue -Object $device -Name "userPrincipalName") }
-            if ([string]::IsNullOrWhiteSpace($currentPrimaryUpn)) { throw "Current Primary User is empty; refusing automatic assignment." }
+            if ($primaryUsers.Count -eq 0) { throw "Intune Primary User relationship is empty; refusing automatic assignment." }
+
+            $currentPrimaryUpn = [string](Get-GraphValue -Object $primaryUsers[0] -Name "userPrincipalName")
+            if ([string]::IsNullOrWhiteSpace($currentPrimaryUpn)) { throw "Intune Primary User relationship contains no UPN; refusing automatic assignment." }
 
             if ($currentPrimaryUpn -notmatch $InstallerPrimaryUserRegex) {
                 Add-Result -DeviceName $intuneDeviceName -EntraDeviceId $aadDeviceId -CurrentPrimaryUser $currentPrimaryUpn -CandidateUser $candidateUpn -Action "Skipped" -Reason "Current Primary User is not an installer account." -LogonCount $logonCount -ActiveDays $activeDays
@@ -510,15 +591,52 @@ try {
 
     $runSucceeded = $true
 }
+catch {
+    $fatalError = $_.Exception.Message
+    Write-Error "Fatal run failure: $fatalError"
+}
 finally {
-    $results | Export-Csv -Path $resultPath -NoTypeInformation -Encoding UTF8
-    try { Disconnect-MgGraph | Out-Null } catch { }
-    if ($transcriptStarted) { try { Stop-Transcript | Out-Null } catch { } }
-    if ($runSucceeded) {
-        Write-Info "Completed successfully. Changes: $changeCount. Result: $resultPath"
+    try {
+        $results | Export-Csv -Path $resultPath -NoTypeInformation -Encoding UTF8
+    }
+    catch {
+        if ([string]::IsNullOrWhiteSpace($fatalError)) {
+            $fatalError = "Failed to write result CSV: $($_.Exception.Message)"
+        }
+        $runSucceeded = $false
+    }
+
+    $rowErrorCount = @($results | Where-Object Action -eq "Error").Count
+    if (-not $runSucceeded) {
+        $exitCode = 1
+    }
+    elseif ($rowErrorCount -gt 0) {
+        $exitCode = 2
     }
     else {
-        Write-Warning "Run failed before completion. Changes: $changeCount. Diagnostic result: $resultPath"
+        $exitCode = 0
+    }
+
+    try {
+        Write-RunStatus -ExitCode $exitCode -FatalError $fatalError
+    }
+    catch {
+        Write-Warning "Failed to write LastRun status file: $($_.Exception.Message)"
+        if ($exitCode -eq 0) { $exitCode = 1 }
+    }
+
+    try { Disconnect-MgGraph | Out-Null } catch { }
+    if ($transcriptStarted) { try { Stop-Transcript | Out-Null } catch { } }
+
+    if ($exitCode -eq 0) {
+        Write-Info "Completed successfully. Changes: $changeCount. Result: $resultPath. Status: $statusFilePath"
+    }
+    elseif ($exitCode -eq 2) {
+        Write-Warning "Completed with per-device errors. Changes: $changeCount. Result: $resultPath. Status: $statusFilePath"
+    }
+    else {
+        Write-Warning "Run failed. Changes: $changeCount. Diagnostic result: $resultPath. Status: $statusFilePath"
     }
 }
 
+exit $exitCode
