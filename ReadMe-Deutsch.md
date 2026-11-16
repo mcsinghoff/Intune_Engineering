@@ -1,6 +1,8 @@
 # Intune Primary User Automation – Kundenimplementierung
 
 > English: [README.md](README.md)
+>
+> Dokumentationsregel: Änderungen an Produktiv-Setup, Berechtigungen, Sicherheitsmaßnahmen, Parametern oder Scheduled-Task-Deployment müssen in beiden README-Dateien gepflegt werden.
 
 Dieses Repository enthält die produktive Lösung zur automatischen Korrektur des **Primary User** in Microsoft Intune, wenn Windows-Geräte ursprünglich mit Installationskonten wie `installer99@kunde.de` registriert wurden.
 
